@@ -783,7 +783,7 @@ class CameraGUI(QtWidgets.QMainWindow):
             if self.temp_drawn_rect and (self.temp_drawn_rect.width() < 10 or self.temp_drawn_rect.height() < 10):
                 self.temp_drawn_rect = None
                 self.crop_apply_btn.setEnabled(False)
-
+                
     def apply_crop_from_rect(self):
         """
         Set the crop rectangle to the drawn rectangle's normalized coordinates.
