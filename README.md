@@ -35,3 +35,18 @@ Install the required Python libraries using pip:
 ```bash
 pip3 install PyQt5 numpy Pillow
 pip3 install picamera2[gui]
+```
+
+# Usage
+
+1. Clone this repository or download the `camera_gui.py` file.  
+2. Navigate to the directory in your terminal.  
+3. Run the application with Python:
+
+```bash
+python3 camera_gui.py
+```
+
+# License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
