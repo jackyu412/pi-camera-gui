@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# Single-file Raspberry Pi camera GUI using Picamera2 + PyQt5.
-# Features: preview, capture JPEG/RAW, start/stop mp4 recording,
-# crop, focus controls, zoomed magnifier, rotate preview.
-
 import sys
 import os
 import subprocess
@@ -445,11 +440,13 @@ class CameraGUI(QtWidgets.QMainWindow):
             return
 
         try:
+            # Capture the raw frame
             frame = self.picam.capture_array()
 
             if frame is None or frame.size == 0:
                 return
 
+            # Convert to 3-channel image if needed
             if frame.ndim == 3 and frame.shape[2] >= 3:
                 img = frame[..., :3]
             elif frame.ndim == 2:
@@ -459,30 +456,20 @@ class CameraGUI(QtWidgets.QMainWindow):
 
             self.current_frame = img.copy()
 
+            # Rotate the image first
             if self.rotation != 0:
                 k = (self.rotation // 90) % 4
                 img = np.rot90(img, k)
-            
-            # This is the corrected crop logic
+
+            # Apply the crop on the rotated image
             if self.applied_crop_rect:
-                label_w, label_h = self.preview_label.width(), self.preview_label.height()
-                sensor_w, sensor_h = self.current_preview_resolution
-                
-                scale_x = sensor_w / label_w
-                scale_y = sensor_h / label_h
-
-                x1_sensor = int(self.applied_crop_rect.left() * scale_x)
-                y1_sensor = int(self.applied_crop_rect.top() * scale_y)
-                x2_sensor = int(self.applied_crop_rect.right() * scale_x)
-                y2_sensor = int(self.applied_crop_rect.bottom() * scale_y)
-
-                x1_sensor = max(0, min(x1_sensor, sensor_w))
-                y1_sensor = max(0, min(y1_sensor, sensor_h))
-                x2_sensor = max(0, min(x2_sensor, sensor_w))
-                y2_sensor = max(0, min(y2_sensor, sensor_h))
+                x1 = int(self.applied_crop_rect.left())
+                y1 = int(self.applied_crop_rect.top())
+                x2 = int(self.applied_crop_rect.right())
+                y2 = int(self.applied_crop_rect.bottom())
                 
                 # Slicing the numpy array for the cropped view
-                img = self.current_frame[y1_sensor:y2_sensor, x1_sensor:x2_sensor, :]
+                img = img[y1:y2, x1:x2, :]
                 
             label_w = self.preview_label.width()
             label_h = self.preview_label.height()
@@ -510,7 +497,7 @@ class CameraGUI(QtWidgets.QMainWindow):
                     [self.mag_rect.left(), self.mag_rect.top(), self.mag_rect.right(), self.mag_rect.bottom()],
                     outline="blue", width=2
                 )
-                self.update_magnifier()
+                self.update_magnifier(rotated_img=img)
 
             qimage = QtGui.QImage(
                 draw_img.tobytes(),
@@ -524,31 +511,30 @@ class CameraGUI(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Preview update error: {e}")
 
-    def update_magnifier(self):
-        """Update the magnifier view based on the mag_rect position."""
-        if self.current_frame is None:
+    def update_magnifier(self, rotated_img):
+        """Update the magnifier view based on the mag_rect position, using the rotated image."""
+        if rotated_img is None:
             return
 
         try:
-            img = self.current_frame
-            h, w = img.shape[:2]
+            h, w = rotated_img.shape[:2]
 
             label_w, label_h = self.preview_label.width(), self.preview_label.height()
             
             scale_x = w / label_w
             scale_y = h / label_h
 
-            x1_sensor = int(self.mag_rect.left() * scale_x)
-            y1_sensor = int(self.mag_rect.top() * scale_y)
-            x2_sensor = int(self.mag_rect.right() * scale_x)
-            y2_sensor = int(self.mag_rect.bottom() * scale_y)
+            x1_rotated = int(self.mag_rect.left() * scale_x)
+            y1_rotated = int(self.mag_rect.top() * scale_y)
+            x2_rotated = int(self.mag_rect.right() * scale_x)
+            y2_rotated = int(self.mag_rect.bottom() * scale_y)
 
-            x1_sensor = max(0, min(x1_sensor, w))
-            y1_sensor = max(0, min(y1_sensor, h))
-            x2_sensor = max(0, min(x2_sensor, w))
-            y2_sensor = max(0, min(y2_sensor, h))
+            x1_rotated = max(0, min(x1_rotated, w))
+            y1_rotated = max(0, min(y1_rotated, h))
+            x2_rotated = max(0, min(x2_rotated, w))
+            y2_rotated = max(0, min(y2_rotated, h))
             
-            crop = img[y1_sensor:y2_sensor, x1_sensor:x2_sensor, :]
+            crop = rotated_img[y1_rotated:y2_rotated, x1_rotated:x2_rotated, :]
             
             if crop.size > 0:
                 mag_pil = Image.fromarray(crop.astype(np.uint8))
@@ -627,6 +613,12 @@ class CameraGUI(QtWidgets.QMainWindow):
             )
 
             if filename:
+                # Apply rotation to the saved image file before renaming
+                if self.rotation != 0:
+                    with Image.open(temp_path) as img:
+                        rotated_img = img.rotate(-self.rotation, expand=True)
+                        rotated_img.save(temp_path)
+                
                 os.rename(temp_path, filename)
                 self.statusBar().showMessage(f"{capture_format.upper()} saved: {os.path.basename(filename)}", 5000)
             else:
@@ -783,16 +775,39 @@ class CameraGUI(QtWidgets.QMainWindow):
             if self.temp_drawn_rect and (self.temp_drawn_rect.width() < 10 or self.temp_drawn_rect.height() < 10):
                 self.temp_drawn_rect = None
                 self.crop_apply_btn.setEnabled(False)
-                
+    
     def apply_crop_from_rect(self):
         """
-        Set the crop rectangle to the drawn rectangle's normalized coordinates.
-        The actual cropping happens in update_preview.
+        Set the crop rectangle to the drawn rectangle's coordinates.
+        The coordinates are relative to the rotated preview image.
         """
         if not self.temp_drawn_rect:
             return
 
-        self.applied_crop_rect = self.temp_drawn_rect
+        # Get the dimensions of the displayed preview image (after rotation)
+        # Note: the size of the preview image depends on rotation
+        rotated_img = self._get_rotated_frame()
+        if rotated_img is None:
+            self.statusBar().showMessage("Cannot apply crop, no image data.", 3000)
+            return
+
+        img_h, img_w = rotated_img.shape[:2]
+
+        # Get the current preview label dimensions
+        label_w = self.preview_label.width()
+        label_h = self.preview_label.height()
+        
+        # Scale the drawn rectangle to match the dimensions of the rotated image
+        scale_x = img_w / label_w
+        scale_y = img_h / label_h
+        
+        self.applied_crop_rect = QtCore.QRect(
+            int(self.temp_drawn_rect.x() * scale_x),
+            int(self.temp_drawn_rect.y() * scale_y),
+            int(self.temp_drawn_rect.width() * scale_x),
+            int(self.temp_drawn_rect.height() * scale_y)
+        ).normalized()
+        
         self.temp_drawn_rect = None
         self.statusBar().showMessage("Cropping applied", 3000)
 
@@ -878,10 +893,23 @@ class CameraGUI(QtWidgets.QMainWindow):
             self.lens_value_label.setText(focus_distance_str)
         except Exception as e:
             print(f"Lens position error: {e}")
+    
+    def _get_rotated_frame(self):
+        """Helper to get the current frame with rotation applied."""
+        if self.current_frame is None:
+            return None
+        
+        img = self.current_frame.copy()
+        if self.rotation != 0:
+            k = (self.rotation // 90) % 4
+            img = np.rot90(img, k)
+        return img
 
     def set_rotation_relative(self, angle_change):
         """Set preview rotation angle relative to current one"""
         self.rotation = (self.rotation + angle_change) % 360
+        # Clear the crop when rotating to avoid inconsistent state
+        self.clear_crop()
         self.statusBar().showMessage(f"Rotation: {self.rotation}°", 3000)
 
     def closeEvent(self, event):
